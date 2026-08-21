@@ -1,0 +1,19 @@
+resources
+| where type =~ 'microsoft.compute/virtualmachines'
+| where properties.hardwareProfile.vmSize matches regex '^Standard_(NC|ND|NV|NG)'
+| extend vmSize = tostring(properties.hardwareProfile.vmSize)
+| extend createdTime = tostring(properties.timeCreated)
+| extend powerState = tostring(properties.extended.instanceView.powerState.displayStatus)
+| extend osType = tostring(properties.storageProfile.osDisk.osType)
+| extend provisioningState = tostring(properties.provisioningState)
+| project
+    name,
+    subscriptionId,
+    resourceGroup,
+    location,
+    sku = vmSize,
+    createdTime,
+    powerState,
+    osType,
+    provisioningState
+| order by subscriptionId asc, resourceGroup asc, name asc
