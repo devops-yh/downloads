@@ -5,9 +5,16 @@ resources
 | extend createdTime = tostring(properties.timeCreated)
 | extend powerState = tostring(properties.extended.instanceView.powerState.displayStatus)
 | extend osType = tostring(properties.storageProfile.osDisk.osType)
+| extend osDiskSizeGB = toint(properties.storageProfile.osDisk.diskSizeGB)
 | extend provisioningState = tostring(properties.provisioningState)
+| join kind=leftouter (
+    resourcecontainers
+    | where type =~ 'microsoft.resources/subscriptions'
+    | project subscriptionId, subscriptionName = name
+) on subscriptionId
 | project
     name,
+    subscriptionName,
     subscriptionId,
     resourceGroup,
     location,
@@ -15,5 +22,6 @@ resources
     createdTime,
     powerState,
     osType,
+    osDiskSizeGB,
     provisioningState
-| order by subscriptionId asc, resourceGroup asc, name asc
+| order by subscriptionName asc, resourceGroup asc, name asc
