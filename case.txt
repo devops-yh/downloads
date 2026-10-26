@@ -1,0 +1,25 @@
+제목: Azure Functions PowerShell 7.6 업그레이드 이후 Azure ML Notebook Kernel 연결 실패
+
+안녕하세요.
+
+Azure Functions의 PowerShell 런타임을 7.4에서 7.6으로 업그레이드한 이후, Gen AI 포털을 통해 생성한 Azure Machine Learning Notebook에서 Python 커널 연결이 실패하는 문제가 발생하여 원인 확인을 요청드립니다.
+
+1. 구성 및 동작 방식
+- Gen AI 포털에서 Notebook 생성 시 Azure Function App의 `user add` 커스텀 코드를 호출합니다.
+- 해당 코드에서 Azure Machine Learning 내 Notebook을 생성합니다.
+- 생성된 Notebook에서 `Python 3 (ipykernel)` 커널을 선택하여 코드를 실행합니다.
+
+2. 발생 현상
+- Azure ML Studio에서 직접 생성한 Notebook은 `Python 3 (ipykernel)` 커널이 정상적으로 연결되고 코드 실행도 가능합니다.
+- 반면 Gen AI 포털을 통해 생성한 Notebook은 커널 상태가 `Connecting`으로 유지되다가 `No Kernel (kernel status: disconnected)` 상태로 전환되며 코드 실행이 불가능합니다.
+
+3. 특이사항
+- 기존 Azure Function App의 PowerShell 런타임은 7.4였으며, 최근 7.6으로 업그레이드한 이후 해당 문제가 발생했습니다.
+- Azure ML Studio에서 직접 생성한 Notebook은 정상 동작하므로, Notebook 생성 경로 또는 Function App의 런타임 변경과 관련된 문제인지 확인이 필요합니다.
+
+4. 요청 사항
+1. PowerShell 7.4에서 7.6으로 업그레이드한 것이 Azure ML Notebook의 커널 연결 실패에 영향을 줄 수 있는지 확인 부탁드립니다.
+2. Function App의 `user add` 커스텀 코드 실행 과정에서 Notebook 생성 설정, 커널 초기화 또는 연결 정보에 문제가 발생하는지 확인 부탁드립니다.
+3. 관련 로그를 확인하여 커널 연결 실패의 원인과 조치 방안을 안내 부탁드립니다.
+
+감사합니다.
