@@ -1,7 +1,7 @@
 <#
 =====================================================================================
  런북명   : Set-AksNodePoolSchedule.ps1
- 버전     : v1.2
+ 버전     : v1.3
  목적     : AKS 노드풀의 NodeCount 를 시간대별로 조정합니다.
  실행환경 : PowerShell 7.6 Runtime environment / Az.Accounts / 시스템 할당 관리 ID
  -------------------------------------------------------------------------------------
@@ -50,7 +50,7 @@ $Const = @{
     # 다른 구독 ID 로 실행되면 즉시 중단되므로, stg 스케줄이 dev 런북에
     # 잘못 연결되는 사고를 여기서 막습니다.
     SubscriptionMap = @{
-        '' = @('cm-hea-dev-genai-rg')
+        '36b4a2b1-b5f8-4e77-8a36-674a9ebe4cfb' = @('cm-hea-dev-genai-rg')
     }
 
     # 스케줄 규칙. 키는 반드시 "클러스터명/노드풀명" 형식이며 양쪽 모두 와일드카드가 됩니다.
@@ -140,7 +140,7 @@ function Write-RunLog {
 $totalWatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 Write-Output "====================================================================="
-Write-Output " AKS 노드풀 스케줄링 런북 시작 (v1.2)"
+Write-Output " AKS 노드풀 스케줄링 런북 시작 (v1.3)"
 Write-Output "====================================================================="
 Write-RunLog -Level 'INFO' -Message "Action=$Action / SubscriptionId=$SubscriptionId"
 
@@ -267,16 +267,35 @@ function Invoke-ArmRequest {
             return @{ Content = $content; Headers = $respHeaders; StatusCode = $statusCode }
         }
         catch {
+            $err = $_   # 아래 파이프라인에서 $_ 가 다른 값으로 바뀌므로 오류 객체를 따로 보관합니다
             $status = 0; $retryAfter = 0
-            if ($_.Exception.Response) {
-                $status = [int]$_.Exception.Response.StatusCode
-                $ra = $_.Exception.Response.Headers | Where-Object { $_.Key -eq 'Retry-After' }
+            if ($err.Exception.Response) {
+                $status = [int]$err.Exception.Response.StatusCode
+                $ra = $err.Exception.Response.Headers | Where-Object { $_.Key -eq 'Retry-After' }
                 if ($ra) { $retryAfter = [int]($ra.Value | Select-Object -First 1) }
+            }
+
+            # ARM 은 실패 시 응답 본문에 {"error":{"code":"..","message":".."}} 형태로 원인을 담아 보냅니다.
+            # HTTP 상태 코드만으로는 원인을 구분할 수 없으므로(404 하나에도 원인이 여러 가지)
+            # 이 code 와 message 를 꺼내 오류 메시지에 함께 남깁니다.
+            $armCode = ''; $armMsg = ''
+            if ($err.ErrorDetails -and $err.ErrorDetails.Message) {
+                try {
+                    $errBody = $err.ErrorDetails.Message | ConvertFrom-Json -ErrorAction Stop
+                    $armCode = [string]$errBody.error.code
+                    $armMsg  = [string]$errBody.error.message
+                }
+                catch {
+                    $armMsg = [string]$err.ErrorDetails.Message   # JSON 이 아니면 본문을 그대로 남깁니다
+                }
             }
 
             $isRetryable = ($status -eq 429) -or ($status -ge 500) -or ($status -eq 0)
             if (-not $isRetryable -or $attempt -eq $MaxRetry) {
-                throw "ARM 호출 실패 ($Method $Uri) [HTTP $status] : $($_.Exception.Message)"
+                $detail = if ($armCode)    { "$armCode - $armMsg" }
+                          elseif ($armMsg) { $armMsg }
+                          else             { $err.Exception.Message }
+                throw "ARM 호출 실패 ($Method $Uri) [HTTP $status] : $detail"
             }
             $waitSec = if ($retryAfter -gt 0) { $retryAfter }
                        else { [Math]::Pow(2, $attempt) + (Get-Random -Minimum 0 -Maximum 3) }
