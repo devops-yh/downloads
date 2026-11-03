@@ -1,7 +1,7 @@
 <#
 =====================================================================================
  런북명   : Set-AksNodePoolSchedule.ps1
- 버전     : v1.3
+ 버전     : v1.5
  목적     : AKS 노드풀의 NodeCount 를 시간대별로 조정합니다.
  실행환경 : PowerShell 7.6 Runtime environment / Az.Accounts / 시스템 할당 관리 ID
  -------------------------------------------------------------------------------------
@@ -95,7 +95,7 @@ $Const = @{
     SkipSystemPool    = $true
     SkipGpuPool       = $true
     GpuVmSizePattern  = '^Standard_N'               # NC/ND/NV/NG 계열이 모두 해당합니다
-    WaitForCompletion = $false                      # 마지막 노드풀까지 완료 확인할지 여부
+    WaitForCompletion = $true                       # 모든 노드풀의 스케일링 완료까지 기다린 뒤 결과 집계
 }
 
 # =====================================================================================
@@ -140,7 +140,7 @@ function Write-RunLog {
 $totalWatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 Write-Output "====================================================================="
-Write-Output " AKS 노드풀 스케줄링 런북 시작 (v1.3)"
+Write-Output " AKS 노드풀 스케줄링 런북 시작 (v1.5)"
 Write-Output "====================================================================="
 Write-RunLog -Level 'INFO' -Message "Action=$Action / SubscriptionId=$SubscriptionId"
 
@@ -382,11 +382,13 @@ function Wait-ArmOperation {
 
 # 위 함수들의 본문을 문자열로 꺼내 둡니다. 병렬 블록 안에서는 부모의 함수가 보이지 않으므로,
 # 이 문자열을 각 러너스페이스의 function: 드라이브에 다시 등록해 사용합니다.
-$fnInvokeArm   = ${function:Invoke-ArmRequest}
-$fnTestTag     = ${function:Test-TagExclusion}
-$fnWaitArm     = ${function:Wait-ArmOperation}
-$fnGetKstNow   = ${function:Get-KstNow}
-$fnFormatLog   = ${function:Format-LogLine}
+# ${function:이름} 은 스크립트 블록을 반환하는데, -Parallel 은 $using: 으로 스크립트 블록을
+# 넘기는 것을 허용하지 않으므로 반드시 .ToString() 으로 문자열로 바꿔야 합니다.
+$fnInvokeArm   = ${function:Invoke-ArmRequest}.ToString()
+$fnTestTag     = ${function:Test-TagExclusion}.ToString()
+$fnWaitArm     = ${function:Wait-ArmOperation}.ToString()
+$fnGetKstNow   = ${function:Get-KstNow}.ToString()
+$fnFormatLog   = ${function:Format-LogLine}.ToString()
 
 # =====================================================================================
 # 6. 클러스터 목록 조회 (리소스 그룹당 1회 + 페이징)
