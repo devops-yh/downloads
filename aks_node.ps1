@@ -1,7 +1,7 @@
 <#
 =====================================================================================
  런북명   : Set-AksNodePoolSchedule.ps1
- 버전     : v1.5
+ 버전     : v1.7
  목적     : AKS 노드풀의 NodeCount 를 시간대별로 조정합니다.
  실행환경 : PowerShell 7.6 Runtime environment / Az.Accounts / 시스템 할당 관리 ID
  -------------------------------------------------------------------------------------
@@ -140,7 +140,7 @@ function Write-RunLog {
 $totalWatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 Write-Output "====================================================================="
-Write-Output " AKS 노드풀 스케줄링 런북 시작 (v1.5)"
+Write-Output " AKS 노드풀 스케줄링 런북 시작 (v1.7)"
 Write-Output "====================================================================="
 Write-RunLog -Level 'INFO' -Message "Action=$Action / SubscriptionId=$SubscriptionId"
 
@@ -210,12 +210,24 @@ $isHoliday = $false
 
 try {
     # Automation 계정 > 공유 리소스 > 변수 에 등록한 값을 읽습니다.
-    # 값 형식은 ["2026-09-24","2026-10-03"] 같은 JSON 배열 문자열입니다.
+    # 아래 두 형식을 모두 받습니다.
+    #   쉼표 구분  : 2026-11-05,2026-11-06
+    #   JSON 배열  : ["2026-11-05","2026-11-06"]
     $holidayRaw = Get-AutomationVariable -Name $Const.HolidayVariable -ErrorAction Stop
-    if (-not [string]::IsNullOrWhiteSpace($holidayRaw)) {
-        $isHoliday = (@($holidayRaw | ConvertFrom-Json)) -contains $todayKst.ToString('yyyy-MM-dd')
+
+    # 대괄호와 따옴표를 지운 뒤 쉼표·세미콜론·공백·줄바꿈으로 나눕니다.
+    # JSON 변환(ConvertFrom-Json)을 쓰지 않는 이유는, 쉼표 구분 형식이 들어오면 변환이 실패하고
+    # JSON 형식이어도 PowerShell 7 이 날짜 문자열을 날짜 객체로 자동 변환해 비교가 어긋날 수 있기 때문입니다.
+    $holidays = @(([string]$holidayRaw) -replace '[\[\]"'']', '' -split '[,;\s]+' | Where-Object { $_ })
+
+    # yyyy-MM-dd 형식이 아닌 항목은 비교에서 걸리지 않으므로, 오타를 알 수 있게 경고를 남깁니다.
+    $invalid = @($holidays | Where-Object { $_ -notmatch '^\d{4}-\d{2}-\d{2}$' })
+    if ($invalid.Count -gt 0) {
+        Write-RunLog -Level 'WARN' -Message "공휴일 변수에 형식이 맞지 않는 값이 있습니다. yyyy-MM-dd 로 입력해야 합니다. ($($invalid -join ', '))"
     }
-    Write-RunLog -Level 'OK' -Message "공휴일 변수 조회 완료 (오늘=$($todayKst.ToString('yyyy-MM-dd')), 주말=$isWeekend, 공휴일=$isHoliday)"
+
+    $isHoliday = $holidays -contains $todayKst.ToString('yyyy-MM-dd')
+    Write-RunLog -Level 'OK' -Message "공휴일 변수 조회 완료 ($($holidays.Count)건, 오늘=$($todayKst.ToString('yyyy-MM-dd')), 주말=$isWeekend, 공휴일=$isHoliday)"
 }
 catch {
     # 공휴일 변수 조회 실패로 런북을 중단하지 않고 주말 판정만 적용합니다.
@@ -254,53 +266,65 @@ function Invoke-ArmRequest {
     $headers = @{ Authorization = "Bearer $AccessToken"; 'Content-Type' = 'application/json' }
 
     for ($attempt = 1; $attempt -le $MaxRetry; $attempt++) {
+
+        $status = 0; $content = $null; $respHeaders = $null; $netError = ''
+
         try {
+            # -SkipHttpErrorCheck : 4xx/5xx 응답에서도 예외를 던지지 않고 응답 본문을 그대로 돌려줍니다.
+            # 예외로 받으면 Azure 가 보낸 오류 본문(원인 코드)이 유실되는 경우가 있어 이 방식을 씁니다.
+            # 성공 여부는 아래에서 상태 코드로 직접 판단합니다.
             $p = @{
                 Uri = $Uri; Method = $Method; Headers = $headers
                 ResponseHeadersVariable = 'respHeaders'
                 StatusCodeVariable      = 'statusCode'
+                SkipHttpErrorCheck      = $true
                 ErrorAction             = 'Stop'
             }
             if ($null -ne $Body) { $p['Body'] = ($Body | ConvertTo-Json -Depth 30 -Compress) }
 
             $content = Invoke-RestMethod @p
-            return @{ Content = $content; Headers = $respHeaders; StatusCode = $statusCode }
+            $status  = [int]$statusCode
         }
         catch {
-            $err = $_   # 아래 파이프라인에서 $_ 가 다른 값으로 바뀌므로 오류 객체를 따로 보관합니다
-            $status = 0; $retryAfter = 0
-            if ($err.Exception.Response) {
-                $status = [int]$err.Exception.Response.StatusCode
-                $ra = $err.Exception.Response.Headers | Where-Object { $_.Key -eq 'Retry-After' }
-                if ($ra) { $retryAfter = [int]($ra.Value | Select-Object -First 1) }
-            }
-
-            # ARM 은 실패 시 응답 본문에 {"error":{"code":"..","message":".."}} 형태로 원인을 담아 보냅니다.
-            # HTTP 상태 코드만으로는 원인을 구분할 수 없으므로(404 하나에도 원인이 여러 가지)
-            # 이 code 와 message 를 꺼내 오류 메시지에 함께 남깁니다.
-            $armCode = ''; $armMsg = ''
-            if ($err.ErrorDetails -and $err.ErrorDetails.Message) {
-                try {
-                    $errBody = $err.ErrorDetails.Message | ConvertFrom-Json -ErrorAction Stop
-                    $armCode = [string]$errBody.error.code
-                    $armMsg  = [string]$errBody.error.message
-                }
-                catch {
-                    $armMsg = [string]$err.ErrorDetails.Message   # JSON 이 아니면 본문을 그대로 남깁니다
-                }
-            }
-
-            $isRetryable = ($status -eq 429) -or ($status -ge 500) -or ($status -eq 0)
-            if (-not $isRetryable -or $attempt -eq $MaxRetry) {
-                $detail = if ($armCode)    { "$armCode - $armMsg" }
-                          elseif ($armMsg) { $armMsg }
-                          else             { $err.Exception.Message }
-                throw "ARM 호출 실패 ($Method $Uri) [HTTP $status] : $detail"
-            }
-            $waitSec = if ($retryAfter -gt 0) { $retryAfter }
-                       else { [Math]::Pow(2, $attempt) + (Get-Random -Minimum 0 -Maximum 3) }
-            Start-Sleep -Seconds ([int]$waitSec)
+            # 응답 자체를 받지 못한 경우(네트워크 단절, DNS 실패 등)만 여기로 옵니다. 상태 코드는 0 으로 둡니다.
+            $netError = $_.Exception.Message
         }
+
+        # 2xx 이면 성공입니다.
+        if ($status -ge 200 -and $status -lt 300) {
+            return @{ Content = $content; Headers = $respHeaders; StatusCode = $status }
+        }
+
+        # ARM 은 실패 시 응답 본문에 {"error":{"code":"..","message":".."}} 형태로 원인을 담아 보냅니다.
+        # HTTP 상태 코드만으로는 원인을 구분할 수 없으므로(404, 409 하나에도 원인이 여러 가지)
+        # 이 code 와 message 를 꺼내 오류 메시지에 함께 남깁니다.
+        $armCode = ''; $armMsg = ''
+        if ($content -and $content.PSObject.Properties.Name -contains 'error') {
+            $armCode = [string]$content.error.code
+            $armMsg  = [string]$content.error.message
+        }
+        elseif ($content) {
+            $armMsg = [string]$content   # JSON 형식이 아니면 본문을 그대로 남깁니다
+        }
+
+        # 429 응답에는 몇 초 뒤 다시 시도하라는 Retry-After 헤더가 붙어 옵니다.
+        $retryAfter = 0
+        if ($respHeaders -and $respHeaders.ContainsKey('Retry-After')) {
+            [int]::TryParse([string](@($respHeaders['Retry-After'])[0]), [ref]$retryAfter) | Out-Null
+        }
+
+        $isRetryable = ($status -eq 429) -or ($status -ge 500) -or ($status -eq 0)
+        if (-not $isRetryable -or $attempt -eq $MaxRetry) {
+            $detail = if ($armCode)      { "$armCode - $armMsg" }
+                      elseif ($armMsg)   { $armMsg }
+                      elseif ($netError) { $netError }
+                      else               { '응답 본문 없음' }
+            throw "ARM 호출 실패 ($Method $Uri) [HTTP $status] : $detail"
+        }
+
+        $waitSec = if ($retryAfter -gt 0) { $retryAfter }
+                   else { [Math]::Pow(2, $attempt) + (Get-Random -Minimum 0 -Maximum 3) }
+        Start-Sleep -Seconds ([int]$waitSec)
     }
 }
 
@@ -576,7 +600,22 @@ $targets | ForEach-Object -ThrottleLimit $Const.ThrottleLimit -Parallel {
             }
             $target = [int]$rule[$act]
 
-            # (6) 멱등 처리: 이미 목표 노드 수면 호출 자체를 생략합니다.
+            # (6) 노드풀 작업 상태 확인. 스케일링·업그레이드 등이 진행 중인 노드풀에 요청을 보내면
+            #     409 Conflict 로 거부됩니다. 클러스터 상태가 Succeeded 여도 노드풀은 작업 중일 수 있어
+            #     노드풀 단위로 따로 확인합니다.
+            #     진행 중인 작업 중 count 는 이미 "요청된 목표 값" 으로 바뀌어 있으므로,
+            #     그 값이 이번 목표와 같으면 같은 변경이 진행 중인 것이라 정상으로 봅니다.
+            if ($pool.provisioningState -ne 'Succeeded') {
+                if ([int]$pool.count -eq $target) {
+                    & $record $pName 'NoChange' "목표 노드 수로 변경이 이미 진행 중입니다. (count=$target, provisioningState=$($pool.provisioningState))" 'INFO'
+                }
+                else {
+                    & $record $pName 'Failed' "노드풀이 다른 작업 진행 중이라 변경하지 못했습니다. (provisioningState=$($pool.provisioningState), 현재 count=$($pool.count), 목표=$target)" 'ERROR'
+                }
+                continue
+            }
+
+            # (7) 멱등 처리: 이미 목표 노드 수면 호출 자체를 생략합니다.
             if ([int]$pool.count -eq $target) {
                 & $record $pName 'NoChange' "이미 목표 노드 수입니다. (count=$target, 규칙=$rulePattern)" 'INFO'
                 continue
