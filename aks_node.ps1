@@ -50,7 +50,7 @@ $Const = @{
     # 다른 구독 ID 로 실행되면 즉시 중단되므로, stg 스케줄이 dev 런북에
     # 잘못 연결되는 사고를 여기서 막습니다.
     SubscriptionMap = @{
-        '36b4a2b1-b5f8-4e77-8a36-674a9ebe4cfb' = @('cm-hea-dev-genai-rg')
+        '' = @('cm-hea-dev-genai-rg')
     }
 
     # 스케줄 규칙. 키는 반드시 "클러스터명/노드풀명" 형식이며 양쪽 모두 와일드카드가 됩니다.
